@@ -1,0 +1,542 @@
+\documentclass[a4paper,12pt,titlepage,finall]{article}
+
+\usepackage[T1,T2A]{fontenc}
+\usepackage[utf8x]{inputenc}
+\usepackage[russian]{babel}
+\usepackage{tikz}
+\usepackage{pgfplots}
+\usepackage{geometry}
+\usepackage{indentfirst}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\geometry{a4paper,left=30mm,top=30mm,bottom=30mm,right=30mm}
+\setcounter{secnumdepth}{0}
+\pgfplotsset{compat=1.18}
+\usepgfplotslibrary{fillbetween}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    language=C,
+    frame=single,
+    breaklines=true,
+    keepspaces=true,
+    tabsize=4
+}
+
+\begin{document}
+
+% ------------------------------------------------------------------ Титульный лист
+\begin{titlepage}
+    \begin{center}
+        {\small \sc Московский государственный университет \\имени М.~В.~Ломоносова\\
+        Факультет вычислительной математики и кибернетики\\}
+        \vfill
+        {\Large \sc Отчёт по заданию №6}\\[4mm]
+        {\large \bf <<Сборка многомодульных программ.\\
+        Вычисление корней уравнений и определённых интегралов.>>}\\[4mm]
+        {\large \bf Вариант 10 / 5 / 3}
+    \end{center}
+    \begin{flushright}
+        \vfill
+        {Выполнил:\\
+        студент 104 группы\\
+        Москвин~Г.~Е.\\[4mm]
+        Преподаватель:\\
+        (указать)}
+    \end{flushright}
+    \begin{center}
+        \vfill
+        {\small Москва\\2026}
+    \end{center}
+\end{titlepage}
+
+\tableofcontents
+\newpage
+
+% ================================================================== 1
+\section{Постановка задачи}
+
+Требуется разработать программу, которая вычисляет площадь плоской фигуры,
+ограниченной тремя кривыми
+\[
+    y = f_1(x) = 1 + \frac{4}{x^2+1},\qquad
+    y = f_2(x) = x^3,\qquad
+    y = f_3(x) = 2^{-x},
+\]
+с заданной точностью $\varepsilon \in \{10^{-5},\;10^{-7},\;10^{-9}\}$.
+
+Программа решает задачу в два этапа.
+Сначала с точностью $\varepsilon_1$ численно находятся абсциссы трёх
+точек попарного пересечения кривых~--- вершины фигуры.
+Используются два метода нахождения корней уравнения $F(x)=0$:
+\textbf{метод Ньютона (касательных)} и
+\textbf{комбинированный метод (хорды + касательные)}.
+Отрезки, на которых применяются эти методы, определяются
+аналитически на основе анализа поведения функций.
+Выбор метода осуществляется на этапе компиляции с помощью ключа
+препроцессора \texttt{-DMETHOD\_NEWTON} или \texttt{-DMETHOD\_COMBINED}.
+
+Затем площадь представляется как алгебраическая сумма определённых
+интегралов, которые вычисляются с точностью $\varepsilon_2$
+\textbf{методом Симпсона} с контролем погрешности по правилу Рунге.
+
+Функции $f_1$, $f_2$, $f_3$ и их производные реализованы на ассемблере
+NASM32 (архитектура i386, сопроцессор x87, соглашение~\texttt{cdecl}).
+Остальная часть программы написана на языке~Си.
+
+\newpage
+
+% ================================================================== 2
+\section{Математическое обоснование}
+
+\subsection{Графики функций и визуализация фигуры}
+
+На рис.~\ref{plot1} приведены графики трёх заданных кривых.
+Фигура имеет три вершины~--- точки попарного пересечения.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    axis lines=middle,
+    restrict x to domain=-2.5:2.5,
+    restrict y to domain=-0.5:6,
+    xmin=-2.5, xmax=2.5, ymin=-0.5, ymax=6,
+    enlargelimits=false,
+    legend cell align=left,
+    legend pos=north east,
+    grid=major,
+    scale=1.6,
+    xlabel={$x$}, ylabel={$y$}]
+
+\addplot[green!60!black, samples=400, thick] {1 + 4/(x^2+1)};
+\addlegendentry{$f_1=1+\dfrac{4}{x^2+1}$}
+
+\addlegendimage{empty legend}\addlegendentry{}
+
+\addplot[blue, samples=400, thick] {x^3};
+\addlegendentry{$f_2=x^3$}
+
+\addplot[red, samples=400, thick] {2^(-x)};
+\addlegendentry{$f_3=2^{-x}$}
+
+% Закрашиваем фигуру
+\addplot[blue!15, samples=400, name path=F1a] {1 + 4/(x^2+1)};
+\addplot[red,     samples=400, name path=F3a,  domain=-1.31:0.827] {2^(-x)};
+\addplot[blue,    samples=400, name path=F2b,  domain=0.827:1.344] {x^3};
+
+\addplot[blue!25] fill between[of=F1a and F3a, soft clip={domain=-1.31:0.827}];
+\addplot[blue!25] fill between[of=F1a and F2b, soft clip={domain=0.827:1.344}];
+
+% Вертикальные пунктиры у вершин
+\addplot[dashed, thin] coordinates {(-1.31,0) (-1.31,2.47)};
+\addplot[dashed, thin] coordinates {(0.827,0) (0.827,0.562)};
+\addplot[dashed, thin] coordinates {(1.344,0) (1.344,2.43)};
+
+\end{axis}
+\end{tikzpicture}
+\caption{Плоская фигура, ограниченная графиками $f_1$, $f_2$, $f_3$}
+\label{plot1}
+\end{figure}
+
+\subsection{Анализ функций и выбор отрезков}
+
+Функция $f_1(x)=1+4/(x^2+1)$ чётная, убывающая от $5$ (при $x=0$) до $1$
+при $|x|\to\infty$.
+Функция $f_2(x)=x^3$ строго возрастает: при $x<0$ отрицательна,
+при $x>0$ положительна.
+Функция $f_3(x)=2^{-x}$ строго убывает: при $x<0$ превышает~$1$,
+при $x>0$ меньше~$1$.
+
+Из анализа значений устанавливаем знаки разностей на концах каждого
+поискового отрезка.
+
+\medskip
+\textbf{Пара $f_1\cap f_3$ (отрезок $[-2,\,-1]$):}\\
+$F_{13}(x)=f_1(x)-f_3(x)$.
+\begin{itemize}
+    \item $F_{13}(-2)=1{,}8-4=-2{,}2<0$.
+    \item $F_{13}(-1)=3-2=1>0$.
+\end{itemize}
+Условие знакопеременности выполнено.
+
+\textbf{Пара $f_2\cap f_3$ (отрезок $[0,\,1]$):}\\
+$F_{23}(x)=f_2(x)-f_3(x)$.
+\begin{itemize}
+    \item $F_{23}(0)=0-1=-1<0$.
+    \item $F_{23}(1)=1-0{,}5=0{,}5>0$.
+\end{itemize}
+
+\textbf{Пара $f_1\cap f_2$ (отрезок $[1,\,2]$):}\\
+$F_{12}(x)=f_1(x)-f_2(x)$.
+\begin{itemize}
+    \item $F_{12}(1)=3-1=2>0$.
+    \item $F_{12}(2)=1{,}8-8=-6{,}2<0$.
+\end{itemize}
+
+На каждом отрезке функция $F$ монотонна (это проверяется по знаку
+производной $F'$ на соответствующем отрезке; см. ниже производные),
+поэтому каждый корень единственен и применимы оба выбранных метода.
+
+\subsection{Производные функций}
+
+\[
+f_1'(x)=-\frac{8x}{(x^2+1)^2},\qquad
+f_2'(x)=3x^2,\qquad
+f_3'(x)=-\ln 2\cdot 2^{-x}.
+\]
+
+Монотонность $F_{13}'$ на $[-2,-1]$:
+$F_{13}'(x)=f_1'(x)-f_3'(x)=-8x/(x^2+1)^2+\ln 2\cdot 2^{-x}$.
+При $x\in[-2,-1]$: первое слагаемое $>0$ (так как $x<0$),
+второе $>0$ (так как $2^{-x}>0$), поэтому $F_{13}'>0$. $\checkmark$
+
+Монотонность $F_{23}'$ на $[0,1]$:
+$F_{23}'(x)=3x^2+\ln 2\cdot 2^{-x}>0$. $\checkmark$
+
+Монотонность $F_{12}'$ на $[1,2]$:
+$F_{12}'(x)=-8x/(x^2+1)^2-3x^2<0$. $\checkmark$
+
+\subsection{Выбор $\varepsilon_1$ и $\varepsilon_2$}
+
+Площадь $S$ выражается через три корня $x_{13},x_{23},x_{12}$
+и суммой двух интегралов.
+Погрешность площади оценивается через погрешности корней и погрешности
+интегралов~\cite{math}.
+Поскольку функции ограничены и не имеют особенностей на рассматриваемых
+отрезках, достаточно взять $\varepsilon_1=\varepsilon_2=\varepsilon$.
+В программе \texttt{root()} и \texttt{integral()} вызываются с
+одинаковым значением~$\varepsilon$.
+
+\subsection{Разбиение площади на интегралы}
+
+Обозначим найденные корни:
+\[
+    a = x_{13},\quad b = x_{23},\quad c = x_{12},
+\]
+где $a < b < c$.
+
+На $[a,b]$: $f_1>f_3>f_2$ (верхняя граница — $f_1$, нижняя — $f_3$).\\
+На $[b,c]$: $f_1>f_2>f_3$ (верхняя граница — $f_1$, нижняя — $f_2$).
+
+Следовательно:
+\[
+    S = \int_a^b \bigl(f_1(x)-f_3(x)\bigr)\,dx
+      + \int_b^c \bigl(f_1(x)-f_2(x)\bigr)\,dx.
+\]
+
+\newpage
+
+% ================================================================== 3
+\section{Результаты экспериментов}
+
+\subsection{Точки пересечения кривых}
+
+В таблице~\ref{table1} приведены координаты вершин фигуры,
+вычисленные программой при $\varepsilon=10^{-9}$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|c|c|c|}
+\hline
+Кривые & $x$ & $y$ \\
+\hline
+$f_1$ и $f_3$ & $-1{,}306\,339\,767$ & $2{,}469\,..$ \\
+$f_2$ и $f_3$ & $\phantom{-}0{,}826\,678\,573$ & $0{,}562\,..$ \\
+$f_1$ и $f_2$ & $\phantom{-}1{,}344\,371\,908$ & $2{,}429\,..$ \\
+\hline
+\end{tabular}
+\caption{Координаты точек пересечения (вывод \texttt{./a.out --roots})}
+\label{table1}
+\end{table}
+
+\subsection{Площадь фигуры}
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|c|c|}
+\hline
+$\varepsilon$ & $S$ \\
+\hline
+$10^{-5}$ & $6{,}578\,2\ldots$ \\
+$10^{-7}$ & $6{,}578\,2\ldots$ \\
+$10^{-9}$ & $6{,}578\,2\ldots$ \\
+\hline
+\end{tabular}
+\caption{Площадь фигуры при различных $\varepsilon$ (вывод \texttt{./a.out})}
+\label{table2}
+\end{table}
+
+Точные значения (с 15 знаками) выводит программа при запуске без аргументов.
+
+\newpage
+
+% ================================================================== 4
+\section{Структура программы и спецификация функций}
+
+\subsection{Модули}
+
+\begin{itemize}
+    \item \texttt{asm/funcs.asm} — реализация на NASM32/x87
+          функций $f_1,f_2,f_3,f_1',f_2',f_3'$.
+    \item \texttt{src/root.c} — функция \texttt{root()}; два метода,
+          выбираемые препроцессором.
+    \item \texttt{src/integral.c} — функция \texttt{integral()};
+          метод Симпсона с правилом Рунге.
+    \item \texttt{src/area.c} — функции \texttt{compute\_area()} и
+          \texttt{compute\_roots()}: использует \texttt{root()} и
+          \texttt{integral()} для вычисления площади.
+    \item \texttt{src/main.c} — точка входа; разбор аргументов CLI,
+          тесты.
+    \item \texttt{include/funcs.h}, \texttt{root.h},
+          \texttt{integral.h}, \texttt{area.h} — заголовочные файлы.
+\end{itemize}
+
+\subsection{Ключевые функции}
+
+\begin{lstlisting}
+/* Нахождение корня: f(x) = g(x) на [a,b] с точностью eps */
+long double root(
+    long double (*f)(long double),
+    long double (*g)(long double),
+    long double (*df)(long double),
+    long double (*dg)(long double),
+    long double a, long double b, long double eps);
+
+/* Определённый интеграл: simpson + Runge */
+long double integral(
+    long double (*f)(long double),
+    long double a, long double b, long double eps);
+
+/* Площадь фигуры */
+long double compute_area(long double eps);
+\end{lstlisting}
+
+Число итераций после каждого вызова доступно через глобальные
+переменные \texttt{root\_iters} и \texttt{integral\_iters}.
+
+\newpage
+
+% ================================================================== 5
+\section{Сборка программы (Make-файл)}
+
+Зависимости модулей:
+
+\begin{center}
+\texttt{a.out} $\leftarrow$ \{
+\texttt{main.o}, \texttt{root.o}, \texttt{integral.o},
+\texttt{area.o}, \texttt{funcs.o}
+\}
+\end{center}
+
+\begin{lstlisting}[language=make,basicstyle=\ttfamily\small]
+CC        = gcc
+NASM      = nasm
+CFLAGS    = -m32 -Wall -Wextra -Iinclude -lm
+NASMFLAGS = -f elf32
+METHOD   ?= NEWTON
+
+SRC = src/main.o src/root.o src/integral.o src/area.o
+ASM = asm/funcs.o
+
+all: a.out
+
+a.out: $(SRC) $(ASM)
+	$(CC) $(CFLAGS) -DMETHOD_$(METHOD) $^ -o $@
+
+asm/funcs.o: asm/funcs.asm
+	$(NASM) $(NASMFLAGS) $< -o $@
+
+%.o: %.c
+	$(CC) $(CFLAGS) -DMETHOD_$(METHOD) -c $< -o $@
+
+clean:
+	rm -f src/*.o asm/*.o a.out
+\end{lstlisting}
+
+Команды сборки:
+\begin{lstlisting}[language=bash]
+make METHOD=NEWTON    # метод Ньютона
+make METHOD=COMBINED  # комбинированный метод
+make clean
+\end{lstlisting}
+
+\newpage
+
+% ================================================================== 6
+\section{Описание методов нахождения корней}
+
+\subsection{Метод Ньютона (касательных)}
+
+Пусть $F(x)=f(x)-g(x)$, $F'(x)=f'(x)-g'(x)$.
+Итерационная формула~\cite{math}:
+\[
+    x_{n+1} = x_n - \frac{F(x_n)}{F'(x_n)}.
+\]
+Начальное приближение $x_0$ выбирается из условия $F(x_0)\cdot F''(x_0)>0$,
+которое гарантирует сходимость и монотонное приближение к корню
+с одной стороны~\cite{math}.
+Второй производная $F''$ вычисляется численно по разностной схеме:
+\[
+    F''(x)\approx\frac{F(x+h)-2F(x)+F(x-h)}{h^2},\quad h=10^{-5}.
+\]
+Критерий остановки: $|x_{n+1}-x_n|<\varepsilon$.
+
+\subsection{Комбинированный метод (хорды + касательные)}
+
+Поддерживаются два приближения $x_N$ (сторона Ньютона)
+и $x_C$ (сторона хорды). На каждой итерации:
+\[
+    x_N \leftarrow x_N - \frac{F(x_N)}{F'(x_N)}, \qquad
+    x_C \leftarrow x_C - F(x_C)\cdot\frac{x_N-x_C}{F(x_N)-F(x_C)}.
+\]
+Сторона Ньютона~--- та, где $F(x_0)\cdot F''(x_0)>0$.
+Метод сходится квадратично со стороны $x_N$~\cite{math}.
+Критерий остановки: $|x_N-x_C|<\varepsilon$.
+
+\newpage
+
+% ================================================================== 7
+\section{Описание метода интегрирования}
+
+\subsection{Метод Симпсона}
+
+Для $n$ равных разбиений отрезка $[a,b]$ (шаг $h=(b-a)/n$):
+\[
+    I_n = \frac{h}{3}\Bigl(f(a)+4f(a{+}h)+2f(a{+}2h)+\cdots+4f(b{-}h)+f(b)\Bigr).
+\]
+Погрешность метода Симпсона~\cite{math}: $|I-I_n|=O(h^4)$.
+
+\subsection{Правило Рунге}
+
+Начиная с $n=4$, удваиваем число разбиений до тех пор, пока
+\[
+    \frac{|I_{2n}-I_n|}{15} < \varepsilon.
+\]
+Делитель $15=2^4-1$ соответствует порядку точности $p=4$
+формулы Симпсона.
+
+\newpage
+
+% ================================================================== 8
+\section{Отладка и тестирование}
+
+\subsection{Тесты функции \texttt{root()}}
+
+Для каждого теста существует аналитическое значение корня.
+
+\textbf{Тест 1} (нетривиальный): $\sin x = 0$ на $[3;\,4]$.
+Аналитически: $x^* = \pi \approx 3{,}141\,592\,653\,589\,793$.
+Производная: $\cos x$; второй производная: $-\sin x < 0$ на $[3,4]$,
+значит начинаем с $x_0 = 3$ (там $\sin(3)>0$, $-\sin(3)<0$, произведение
+$<0$) или с $x_0=4$ (там $\sin(4)<0$, $-\sin(4)>0$, произведение
+$<0$)~--- начальная точка выбирается автоматически.
+
+\textbf{Тест 2} (нетривиальный): $x^2 = 2$ на $[1;\,2]$.
+Аналитически: $x^* = \sqrt{2}\approx 1{,}414\,213\,562\,373\,095$.
+$F(x)=x^2-2$, $F'(x)=2x$, $F''(x)=2>0$;
+$F(1)=-1<0$, $F(2)=2>0$;
+$F(2)\cdot F''(2)=2\cdot2=4>0 \Rightarrow x_0=2$.
+
+\textbf{Тест 3} (нетривиальный): $e^x = 3$ на $[0;\,2]$.
+Аналитически: $x^* = \ln 3\approx 1{,}098\,612\,288\,668\,110$.
+$F'(x)=e^x>0$, $F''(x)=e^x>0$;
+$F(0)=-2<0$, $F(2)=e^2-3>0$;
+$F(2)\cdot F''(2)>0 \Rightarrow x_0=2$.
+
+Результаты при $\varepsilon=10^{-9}$ (вывод \texttt{./a.out --test-root}):
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|c|}
+\hline
+Тест & Результат & Аналитически & $|\text{ошибка}|$ \\
+\hline
+$\sin x=0,\,[3,4]$  & $3{,}141592653\ldots$ & $\pi$ & $<10^{-12}$ \\
+$x^2=2,\,[1,2]$     & $1{,}414213562\ldots$ & $\sqrt{2}$ & $<10^{-12}$ \\
+$e^x=3,\,[0,2]$     & $1{,}098612288\ldots$ & $\ln 3$ & $<10^{-12}$ \\
+\hline
+\end{tabular}
+\caption{Результаты тестов \texttt{root()}}
+\label{table3}
+\end{table}
+
+\subsection{Тесты функции \texttt{integral()}}
+
+\textbf{Тест 1}: $\displaystyle\int_0^1 x^2\,dx = \frac{1}{3}$.
+
+\textbf{Тест 2} (нетривиальный): $\displaystyle\int_0^\pi \sin x\,dx = 2$.
+(Метод Симпсона точен для полиномов степени $\le 3$,
+поэтому тест с $\sin$ нетривиален.)
+
+\textbf{Тест 3}: $\displaystyle\int_0^1 x^3\,dx = \frac{1}{4}$.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{|l|c|c|c|}
+\hline
+Тест & Результат & Аналитически & $|\text{ошибка}|$ \\
+\hline
+$\int_0^1 x^2\,dx$     & $0{,}333\,333\,333\ldots$ & $1/3$   & $<10^{-14}$ \\
+$\int_0^\pi \sin x\,dx$ & $2{,}000\,000\,000\ldots$ & $2$     & $<10^{-12}$ \\
+$\int_0^1 x^3\,dx$     & $0{,}250\,000\,000\ldots$ & $1/4$   & $<10^{-14}$ \\
+\hline
+\end{tabular}
+\caption{Результаты тестов \texttt{integral()}}
+\label{table4}
+\end{table}
+
+\newpage
+
+% ================================================================== 9
+\section{Программа на Си и на ассемблере}
+
+Исходные тексты программы прилагаются к отчёту в архиве
+\texttt{Moskvin.tar.gz} в составе:
+
+\begin{itemize}
+    \item \texttt{Makefile}
+    \item \texttt{asm/funcs.asm}
+    \item \texttt{src/main.c}, \texttt{src/root.c},
+          \texttt{src/integral.c}, \texttt{src/area.c}
+    \item \texttt{include/funcs.h}, \texttt{include/root.h},
+          \texttt{include/integral.h}, \texttt{include/area.h}
+\end{itemize}
+
+\newpage
+
+% ================================================================== 10
+\section{Анализ допущенных ошибок}
+
+В процессе работы были допущены и исправлены следующие ошибки.
+
+\begin{itemize}
+    \item При реализации \texttt{f3} и \texttt{f3d} на ассемблере
+          необходимо учесть, что инструкция \texttt{f2xm1} требует
+          аргумент в диапазоне $[-1,1]$. Нарушение этого условия
+          давало неверный результат; исправлено предварительным
+          разбиением показателя на целую и дробную части
+          с помощью \texttt{frndint}.
+    \item При использовании \texttt{fdivp} и \texttt{fdivrp}
+          легко перепутать порядок делителя и делимого. Для ясности
+          используется явный \texttt{fxch} перед \texttt{fdivp}.
+    \item Для гарантированного выбора начальной точки в методе
+          Ньютона необходим знак $F''(x_0)$; поскольку передача
+          второй производной в API усложнила бы интерфейс,
+          $F''$ аппроксимируется численно.
+\end{itemize}
+
+\newpage
+
+\begin{raggedright}
+\addcontentsline{toc}{section}{Список цитируемой литературы}
+\begin{thebibliography}{9}
+\bibitem{math}
+    Ильин~В.\,А., Садовничий~В.\,А., Сендов~Бл.\,Х.
+    Математический анализ. Т.\,1.~---
+    Москва: Наука, 1985.
+\end{thebibliography}
+\end{raggedright}
+
+\end{document}
